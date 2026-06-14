@@ -759,6 +759,10 @@ Reglas:
 - No agregues texto fuera del JSON.
 `;
 
+    if (!process.env.GEMINI_API_KEY) {
+      throw new Error("Falta configurar GEMINI_API_KEY en Render");
+    }
+
     const result = await ai.models.generateContent({
       model: "gemini-2.5-flash",
       contents: prompt
@@ -799,12 +803,38 @@ Reglas:
     });
 
   } catch (error) {
-    console.error("Error en /ia/recomendacion:", error);
+    console.error("Error en /ia/recomendacion:", error.message || error);
 
-    res.status(500).json({
-      ok: false,
-      recomendacion: "No se pudo consultar la IA en este momento. Intenta nuevamente más tarde.",
-      ejerciciosRecomendados: []
+    const {
+      consulta,
+      movilidad,
+      objetivo,
+      apoyoFisico,
+      dolorActual
+    } = req.body;
+
+    const dolor = Number(dolorActual) || 0;
+    const candidatos = buscarEjerciciosCandidatos(consulta || "", dolor);
+
+    const recomendacionRespaldo =
+      "No se pudo consultar Gemini en este momento, pero RehabFit generó una recomendación de respaldo con base en tu perfil y el catálogo de ejercicios.\n\n" +
+      "Cómo estructurar mejor tu consulta:\n" +
+      "• Indica la zona afectada: rodilla, hombro, espalda, tobillo, mano, cuello, etc.\n" +
+      "• Indica tu dolor actual del 0 al 10.\n" +
+      "• Explica tu nivel de movilidad: baja, media o alta.\n" +
+      "• Menciona tu objetivo: reducir dolor, mejorar movilidad o fortalecer.\n" +
+      "• Indica si necesitas apoyo físico, silla, bastón o ayuda de otra persona.\n\n" +
+      "Tomando en cuenta tu perfil:\n" +
+      `• Movilidad: ${movilidad || "No especificada"}\n` +
+      `• Objetivo: ${objetivo || "No especificado"}\n` +
+      `• Apoyo físico: ${apoyoFisico || "No especificado"}\n` +
+      `• Dolor actual: ${dolor}/10\n\n` +
+      "Recomendación general: realiza ejercicios suaves, lentos y controlados. Detente si el dolor aumenta, aparece inflamación, mareo o inestabilidad.";
+
+    res.json({
+      ok: true,
+      recomendacion: recomendacionRespaldo,
+      ejerciciosRecomendados: candidatos.slice(0, 5)
     });
   }
 });
