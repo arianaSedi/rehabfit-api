@@ -1,7 +1,12 @@
 const express = require("express");
 const cors = require("cors");
+const { GoogleGenAI } = require("@google/genai");
 
 const app = express();
+
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY
+});
 
 app.use(cors());
 app.use(express.json());
@@ -569,7 +574,8 @@ app.get("/", (req, res) => {
       "GET /ejercicios/:id",
       "GET /ejercicios/zona/:zona",
       "GET /ejercicios/nivel/:nivel",
-      "GET /buscar?texto=rodilla"
+      "GET /buscar?texto=rodilla",
+      "POST /ia/recomendacion"
     ]
   });
 });
@@ -633,6 +639,174 @@ app.get("/buscar", (req, res) => {
     busqueda: texto,
     ejercicios: resultado
   });
+});
+
+function normalizarTexto(texto) {
+  return String(texto || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function buscarEjerciciosCandidatos(consulta, dolorActual) {
+  const texto = normalizarTexto(consulta);
+
+  let palabrasClave = [];
+
+  if (texto.includes("rodilla")) {
+    palabrasClave = ["rodilla", "pierna", "cuadriceps"];
+  } else if (texto.includes("tobillo") || texto.includes("pie")) {
+    palabrasClave = ["tobillo", "pie", "pantorrilla"];
+  } else if (texto.includes("hombro")) {
+    palabrasClave = ["hombro", "brazo"];
+  } else if (texto.includes("muneca") || texto.includes("muñeca")) {
+    palabrasClave = ["muneca", "muñeca"];
+  } else if (texto.includes("mano") || texto.includes("dedos")) {
+    palabrasClave = ["mano", "dedos"];
+  } else if (texto.includes("espalda") || texto.includes("lumbar") || texto.includes("columna")) {
+    palabrasClave = ["espalda", "lumbar", "columna"];
+  } else if (texto.includes("cuello") || texto.includes("cervical")) {
+    palabrasClave = ["cuello", "cervical"];
+  } else {
+    palabrasClave = ["general", "movilidad", "suave", "estiramiento"];
+  }
+
+  let candidatos = ejercicios.filter(ejercicio => {
+    const contenido = normalizarTexto(
+      ejercicio.nombre + " " +
+      ejercicio.zona + " " +
+      ejercicio.nivel + " " +
+      ejercicio.posicion + " " +
+      ejercicio.descripcion
+    );
+
+    return palabrasClave.some(palabra =>
+      contenido.includes(normalizarTexto(palabra))
+    );
+  });
+
+  if (dolorActual >= 7) {
+    candidatos = candidatos.filter(ejercicio =>
+      normalizarTexto(ejercicio.nivel) === "baja"
+    );
+  }
+
+  if (candidatos.length === 0) {
+    candidatos = ejercicios.filter(ejercicio =>
+      normalizarTexto(ejercicio.nivel) === "baja"
+    );
+  }
+
+  return candidatos.slice(0, 8);
+}
+
+app.post("/ia/recomendacion", async (req, res) => {
+  try {
+    const {
+      uid,
+      consulta,
+      movilidad,
+      objetivo,
+      apoyoFisico,
+      dolorActual
+    } = req.body;
+
+    if (!consulta || consulta.trim().length < 10) {
+      return res.status(400).json({
+        ok: false,
+        recomendacion: "Escribe una consulta más detallada. Ejemplo: Tengo dolor leve en rodilla, movilidad baja y quiero ejercicios suaves sentado.",
+        ejerciciosRecomendados: []
+      });
+    }
+
+    const dolor = Number(dolorActual) || 0;
+    const candidatos = buscarEjerciciosCandidatos(consulta, dolor);
+
+    const prompt = `
+Eres un asistente de apoyo para una app de rehabilitación llamada RehabFit.
+
+IMPORTANTE:
+- No eres médico.
+- No debes diagnosticar enfermedades.
+- No debes prometer curación.
+- No recomiendes medicamentos.
+- Debes recomendar únicamente ejercicios del catálogo proporcionado.
+- Si el dolor es alto, recomienda ejercicios de baja intensidad y consultar a un profesional.
+- Responde en español claro, breve y seguro.
+
+Datos del usuario:
+- UID: ${uid || "No especificado"}
+- Consulta del usuario: ${consulta}
+- Movilidad: ${movilidad || "No especificada"}
+- Objetivo: ${objetivo || "No especificado"}
+- Apoyo físico: ${apoyoFisico || "No especificado"}
+- Dolor actual: ${dolor}/10
+
+Catálogo de ejercicios candidatos:
+${JSON.stringify(candidatos, null, 2)}
+
+Devuelve SOLO un JSON válido con esta estructura exacta:
+
+{
+  "recomendacion": "Texto de recomendación general. Debe incluir cómo estructurar mejor la consulta: zona afectada, dolor 0-10, movilidad, objetivo y apoyo físico. También debe incluir advertencias de seguridad.",
+  "idsEjercicios": [1, 2, 3]
+}
+
+Reglas:
+- idsEjercicios debe tener máximo 5 IDs.
+- Los IDs deben existir en el catálogo candidato.
+- No inventes ejercicios.
+- No agregues texto fuera del JSON.
+`;
+
+    const result = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: prompt
+    });
+
+    let textoIA = result.text || "";
+
+    textoIA = textoIA
+      .replace(/```json/g, "")
+      .replace(/```/g, "")
+      .trim();
+
+    let respuestaIA;
+
+    try {
+      respuestaIA = JSON.parse(textoIA);
+    } catch (errorJson) {
+      respuestaIA = {
+        recomendacion: textoIA,
+        idsEjercicios: candidatos.slice(0, 5).map(ejercicio => ejercicio.id)
+      };
+    }
+
+    const ids = Array.isArray(respuestaIA.idsEjercicios)
+      ? respuestaIA.idsEjercicios
+      : [];
+
+    const ejerciciosRecomendados = candidatos.filter(ejercicio =>
+      ids.includes(ejercicio.id)
+    );
+
+    res.json({
+      ok: true,
+      recomendacion: respuestaIA.recomendacion || "Recomendación generada correctamente.",
+      ejerciciosRecomendados: ejerciciosRecomendados.length > 0
+        ? ejerciciosRecomendados
+        : candidatos.slice(0, 5)
+    });
+
+  } catch (error) {
+    console.error("Error en /ia/recomendacion:", error);
+
+    res.status(500).json({
+      ok: false,
+      recomendacion: "No se pudo consultar la IA en este momento. Intenta nuevamente más tarde.",
+      ejerciciosRecomendados: []
+    });
+  }
 });
 
 app.get("/ejercicios/:id", (req, res) => {
