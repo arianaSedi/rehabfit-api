@@ -569,6 +569,7 @@ app.get("/", (req, res) => {
     mensaje: "API RehabFit funcionando correctamente",
     descripcion: "API de ejercicios de rehabilitación y ejercicios adaptados.",
     advertenciaGeneral: "Esta información es de apoyo y no sustituye atención médica o fisioterapia profesional.",
+    totalEjercicios: ejercicios.length,
     endpoints: [
       "GET /ejercicios",
       "GET /ejercicios/:id",
@@ -648,28 +649,102 @@ function normalizarTexto(texto) {
     .replace(/[\u0300-\u036f]/g, "");
 }
 
-function buscarEjerciciosCandidatos(consulta, dolorActual) {
+function detectarZonaYPrioridades(consulta) {
   const texto = normalizarTexto(consulta);
 
-  let palabrasClave = [];
-
-  if (texto.includes("rodilla")) {
-    palabrasClave = ["rodilla", "pierna", "cuadriceps"];
-  } else if (texto.includes("tobillo") || texto.includes("pie")) {
-    palabrasClave = ["tobillo", "pie", "pantorrilla"];
-  } else if (texto.includes("hombro")) {
-    palabrasClave = ["hombro", "brazo"];
-  } else if (texto.includes("muneca") || texto.includes("muñeca")) {
-    palabrasClave = ["muneca", "muñeca"];
-  } else if (texto.includes("mano") || texto.includes("dedos")) {
-    palabrasClave = ["mano", "dedos"];
-  } else if (texto.includes("espalda") || texto.includes("lumbar") || texto.includes("columna")) {
-    palabrasClave = ["espalda", "lumbar", "columna"];
-  } else if (texto.includes("cuello") || texto.includes("cervical")) {
-    palabrasClave = ["cuello", "cervical"];
-  } else {
-    palabrasClave = ["general", "movilidad", "suave", "estiramiento"];
+  if (texto.includes("rodilla") || texto.includes("rodillas")) {
+    return {
+      zonaDetectada: "Rodilla",
+      palabrasClave: ["rodilla", "cuadriceps", "talon", "pierna"]
+    };
   }
+
+  if (
+    texto.includes("tobillo") ||
+    texto.includes("tobillos") ||
+    texto.includes("pie") ||
+    texto.includes("pies")
+  ) {
+    return {
+      zonaDetectada: "Tobillo",
+      palabrasClave: ["tobillo", "pie", "talon", "pantorrilla"]
+    };
+  }
+
+  if (texto.includes("hombro") || texto.includes("hombros")) {
+    return {
+      zonaDetectada: "Hombro",
+      palabrasClave: ["hombro", "escapular", "omoplatos", "brazo"]
+    };
+  }
+
+  if (
+    texto.includes("muneca") ||
+    texto.includes("muñeca") ||
+    texto.includes("munecas") ||
+    texto.includes("muñecas")
+  ) {
+    return {
+      zonaDetectada: "Muñeca",
+      palabrasClave: ["muneca", "muñeca"]
+    };
+  }
+
+  if (
+    texto.includes("mano") ||
+    texto.includes("manos") ||
+    texto.includes("dedo") ||
+    texto.includes("dedos")
+  ) {
+    return {
+      zonaDetectada: "Mano",
+      palabrasClave: ["mano", "dedos"]
+    };
+  }
+
+  if (
+    texto.includes("espalda") ||
+    texto.includes("lumbar") ||
+    texto.includes("columna") ||
+    texto.includes("lumbalgia")
+  ) {
+    return {
+      zonaDetectada: "Espalda",
+      palabrasClave: ["espalda", "lumbar", "columna", "omoplatos"]
+    };
+  }
+
+  if (
+    texto.includes("cuello") ||
+    texto.includes("cervical") ||
+    texto.includes("cervicales")
+  ) {
+    return {
+      zonaDetectada: "Cuello",
+      palabrasClave: ["cuello", "cervical"]
+    };
+  }
+
+  if (
+    texto.includes("pierna") ||
+    texto.includes("piernas") ||
+    texto.includes("cadera")
+  ) {
+    return {
+      zonaDetectada: "Pierna",
+      palabrasClave: ["pierna", "cadera", "isquiotibiales"]
+    };
+  }
+
+  return {
+    zonaDetectada: "General",
+    palabrasClave: ["general", "movilidad", "suave", "respiracion", "sentado"]
+  };
+}
+
+function buscarEjerciciosCandidatos(consulta, dolorActual) {
+  const texto = normalizarTexto(consulta);
+  const { zonaDetectada, palabrasClave } = detectarZonaYPrioridades(consulta);
 
   let candidatos = ejercicios.filter(ejercicio => {
     const contenido = normalizarTexto(
@@ -688,6 +763,42 @@ function buscarEjerciciosCandidatos(consulta, dolorActual) {
   if (dolorActual >= 7) {
     candidatos = candidatos.filter(ejercicio =>
       normalizarTexto(ejercicio.nivel) === "baja"
+    );
+  }
+
+  if (texto.includes("sentado") || texto.includes("sentada") || texto.includes("silla")) {
+    const sentados = candidatos.filter(ejercicio =>
+      normalizarTexto(ejercicio.posicion).includes("sentado")
+    );
+
+    if (sentados.length > 0) {
+      candidatos = sentados;
+    }
+  }
+
+  if (texto.includes("acostado") || texto.includes("acostada") || texto.includes("cama")) {
+    const acostados = candidatos.filter(ejercicio =>
+      normalizarTexto(ejercicio.posicion).includes("acostado")
+    );
+
+    if (acostados.length > 0) {
+      candidatos = acostados;
+    }
+  }
+
+  if (texto.includes("de pie") || texto.includes("parado") || texto.includes("parada")) {
+    const dePie = candidatos.filter(ejercicio =>
+      normalizarTexto(ejercicio.posicion).includes("de pie")
+    );
+
+    if (dePie.length > 0) {
+      candidatos = dePie;
+    }
+  }
+
+  if (candidatos.length === 0) {
+    candidatos = ejercicios.filter(ejercicio =>
+      normalizarTexto(ejercicio.zona) === normalizarTexto(zonaDetectada)
     );
   }
 
@@ -720,6 +831,7 @@ app.post("/ia/recomendacion", async (req, res) => {
     }
 
     const dolor = Number(dolorActual) || 0;
+    const { zonaDetectada } = detectarZonaYPrioridades(consulta);
     const candidatos = buscarEjerciciosCandidatos(consulta, dolor);
 
     const prompt = `
@@ -733,10 +845,14 @@ IMPORTANTE:
 - Debes recomendar únicamente ejercicios del catálogo proporcionado.
 - Si el dolor es alto, recomienda ejercicios de baja intensidad y consultar a un profesional.
 - Responde en español claro, breve y seguro.
+- No repitas exactamente la misma recomendación en todas las consultas.
+- Adapta la recomendación a la zona afectada detectada.
+- Menciona por qué los ejercicios elegidos son adecuados.
 
 Datos del usuario:
 - UID: ${uid || "No especificado"}
 - Consulta del usuario: ${consulta}
+- Zona detectada por el sistema: ${zonaDetectada}
 - Movilidad: ${movilidad || "No especificada"}
 - Objetivo: ${objetivo || "No especificado"}
 - Apoyo físico: ${apoyoFisico || "No especificado"}
@@ -748,7 +864,7 @@ ${JSON.stringify(candidatos, null, 2)}
 Devuelve SOLO un JSON válido con esta estructura exacta:
 
 {
-  "recomendacion": "Texto de recomendación general. Debe incluir cómo estructurar mejor la consulta: zona afectada, dolor 0-10, movilidad, objetivo y apoyo físico. También debe incluir advertencias de seguridad.",
+  "recomendacion": "Texto breve de recomendación. Debe mencionar la zona afectada, explicar cómo estructurar mejor la consulta y agregar una advertencia de seguridad.",
   "idsEjercicios": [1, 2, 3]
 }
 
@@ -756,6 +872,9 @@ Reglas:
 - idsEjercicios debe tener máximo 5 IDs.
 - Los IDs deben existir en el catálogo candidato.
 - No inventes ejercicios.
+- La recomendación debe variar según la zona afectada y el objetivo del usuario.
+- Si el usuario pide ejercicios sentado, prioriza ejercicios en posición sentado.
+- Si el usuario menciona espalda, no recomiendes rodilla salvo que esté en el catálogo candidato.
 - No agregues texto fuera del JSON.
 `;
 
@@ -796,6 +915,7 @@ Reglas:
 
     res.json({
       ok: true,
+      zonaDetectada,
       recomendacion: respuestaIA.recomendacion || "Recomendación generada correctamente.",
       ejerciciosRecomendados: ejerciciosRecomendados.length > 0
         ? ejerciciosRecomendados
@@ -814,10 +934,12 @@ Reglas:
     } = req.body;
 
     const dolor = Number(dolorActual) || 0;
+    const { zonaDetectada } = detectarZonaYPrioridades(consulta || "");
     const candidatos = buscarEjerciciosCandidatos(consulta || "", dolor);
 
     const recomendacionRespaldo =
       "No se pudo consultar Gemini en este momento, pero RehabFit generó una recomendación de respaldo con base en tu perfil y el catálogo de ejercicios.\n\n" +
+      `Zona detectada: ${zonaDetectada}.\n\n` +
       "Cómo estructurar mejor tu consulta:\n" +
       "• Indica la zona afectada: rodilla, hombro, espalda, tobillo, mano, cuello, etc.\n" +
       "• Indica tu dolor actual del 0 al 10.\n" +
@@ -833,6 +955,7 @@ Reglas:
 
     res.json({
       ok: true,
+      zonaDetectada,
       recomendacion: recomendacionRespaldo,
       ejerciciosRecomendados: candidatos.slice(0, 5)
     });
